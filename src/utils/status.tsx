@@ -342,6 +342,8 @@ export function buildAPIProviderProperties(): Property[] {
       gemini: 'Gemini API',
       grok: 'Grok API',
       openai: 'OpenAI API',
+      deepseek: 'DeepSeek API',
+      qwen: 'Qwen API',
     }[apiProvider]
     properties.push({
       label: 'API provider',
@@ -443,6 +445,18 @@ export function buildAPIProviderProperties(): Property[] {
     properties.push({
       label: 'OpenAI base URL',
       value: openaiBaseUrl,
+    })
+  } else if (apiProvider === 'deepseek') {
+    const deepseekBaseUrl = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1'
+    properties.push({
+      label: 'DeepSeek base URL',
+      value: deepseekBaseUrl,
+    })
+  } else if (apiProvider === 'qwen') {
+    const qwenBaseUrl = process.env.QWEN_BASE_URL || 'https://dashscope.aliyuncs.com/compatible-mode/v1'
+    properties.push({
+      label: 'Qwen base URL',
+      value: qwenBaseUrl,
     })
   }
 

@@ -1360,6 +1360,18 @@ async function* queryModel(
     return
   }
 
+  if (getAPIProvider() === 'deepseek') {
+    const { queryModelDeepSeek } = await import('./deepseek/index.js')
+    yield* queryModelDeepSeek(messagesForAPI, systemPrompt, filteredTools, signal, options)
+    return
+  }
+
+  if (getAPIProvider() === 'qwen') {
+    const { queryModelQwen } = await import('./qwen/index.js')
+    yield* queryModelQwen(messagesForAPI, systemPrompt, filteredTools, signal, options)
+    return
+  }
+
   // Instrumentation: Track message count after normalization
   logEvent('tengu_api_after_normalize', {
     postNormalizedMessageCount: messagesForAPI.length,

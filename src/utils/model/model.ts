@@ -25,6 +25,11 @@ import { formatModelPricing, getOpus46CostTier } from '../modelCost.js'
 import { getSettings_DEPRECATED } from '../settings/settings.js'
 import type { PermissionMode } from '../permissions/PermissionMode.js'
 import { getAPIProvider } from './providers.js'
+import { resolveDeepSeekModel } from '../../services/api/deepseek/modelMapping.js'
+import { resolveQwenModel } from '../../services/api/qwen/modelMapping.js'
+import { resolveOpenAIModel } from '../../services/api/openai/modelMapping.js'
+import { resolveGrokModel } from '../../services/api/grok/modelMapping.js'
+import { resolveGeminiModel } from '../../services/api/gemini/modelMapping.js'
 import { LIGHTNING_BOLT } from '../../constants/figures.js'
 import { isModelAllowed } from './modelAllowlist.js'
 import { type ModelAlias, isModelAlias } from './aliases.js'
@@ -436,6 +441,22 @@ function maskModelCodename(baseName: string): string {
 }
 
 export function renderModelName(model: ModelName): string {
+  // For third-party providers, resolve and display the actual model name
+  // instead of the Anthropic model ID.
+  const provider = getAPIProvider()
+  switch (provider) {
+    case 'deepseek':
+      return resolveDeepSeekModel(model)
+    case 'qwen':
+      return resolveQwenModel(model)
+    case 'openai':
+      return resolveOpenAIModel(model)
+    case 'grok':
+      return resolveGrokModel(model)
+    case 'gemini':
+      return resolveGeminiModel(model)
+  }
+
   const publicName = getPublicModelDisplayName(model)
   if (publicName) {
     return publicName
