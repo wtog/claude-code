@@ -16,8 +16,8 @@ import type {
 } from 'src/entrypoints/agentSdkTypes.js'
 import type { BetaMessageDeltaUsage } from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
 import { accumulateUsage, updateUsage } from 'src/services/api/claude.js'
-import type { NonNullableUsage } from 'src/services/api/logging.js'
-import { EMPTY_USAGE } from 'src/services/api/logging.js'
+import type { NonNullableUsage } from '@ant/model-provider'
+import { EMPTY_USAGE } from '@ant/model-provider'
 import stripAnsi from 'strip-ansi'
 import type { Command } from './commands.js'
 import { getSlashCommandToolSkills } from './commands.js'
@@ -1182,6 +1182,17 @@ export class QueryEngine {
 
   interrupt(): void {
     this.abortController.abort()
+  }
+
+  /** Reset the abort controller so the next submitMessage() call can start
+   *  with a fresh, non-aborted signal. Must be called after interrupt(). */
+  resetAbortController(): void {
+    this.abortController = createAbortController()
+  }
+
+  /** Expose the current abort signal for external consumers (e.g. ACP bridge). */
+  getAbortSignal(): AbortSignal {
+    return this.abortController.signal
   }
 
   getMessages(): readonly Message[] {

@@ -10,17 +10,10 @@ import type { AgentId } from '../../../types/ids.js'
 import type { Tools } from '../../../Tool.js'
 import type { Stream } from 'openai/streaming.mjs'
 import type {
-  ChatCompletionChunk,
   ChatCompletionCreateParamsStreaming,
 } from 'openai/resources/chat/completions/completions.mjs'
 import { getOpenAIClient } from './client.js'
-import { anthropicMessagesToOpenAI } from './convertMessages.js'
-import {
-  anthropicToolsToOpenAI,
-  anthropicToolChoiceToOpenAI,
-} from './convertTools.js'
-import { adaptOpenAIStreamToAnthropic } from './streamAdapter.js'
-import { resolveOpenAIModel } from './modelMapping.js'
+import { anthropicMessagesToOpenAI, resolveOpenAIModel, adaptOpenAIStreamToAnthropic, anthropicToolsToOpenAI, anthropicToolChoiceToOpenAI } from '@ant/model-provider'
 import { normalizeMessagesForAPI } from '../../../utils/messages.js'
 import { toolToAPISchema } from '../../../utils/api.js'
 import {
@@ -30,7 +23,8 @@ import {
 import { logForDebugging } from '../../../utils/debug.js'
 import { addToTotalSessionCost } from '../../../cost-tracker.js'
 import { calculateUSDCost } from '../../../utils/modelCost.js'
-import { isEnvTruthy, isEnvDefinedFalsy } from '../../../utils/envUtils.js'
+import { isOpenAIThinkingEnabled, resolveOpenAIMaxTokens, buildOpenAIRequestBody } from './requestBody.js'
+export { isOpenAIThinkingEnabled, resolveOpenAIMaxTokens, buildOpenAIRequestBody }
 import { getModelMaxOutputTokens } from '../../../utils/context.js'
 import type { Options } from '../claude.js'
 import { randomUUID } from 'crypto'
@@ -47,82 +41,6 @@ import {
   isDeferredTool,
   TOOL_SEARCH_TOOL_NAME,
 } from '@claude-code-best/builtin-tools/tools/ToolSearchTool/prompt.js'
-
-/**
- * Detect whether DeepSeek-style thinking mode should be enabled.
- *
- * Enabled when:
- * 1. OPENAI_ENABLE_THINKING=1 is set (explicit enable), OR
- * 2. Model name contains "deepseek-reasoner" OR "DeepSeek-V3.2" (auto-detect, case-insensitive)
- *
- * Disabled when:
- * - OPENAI_ENABLE_THINKING=0/false/no/off is explicitly set (overrides model detection)
- *
- * @param model - The resolved OpenAI model name
- * @internal Exported for testing purposes only
- */
-export function isOpenAIThinkingEnabled(model: string): boolean {
-  // Explicit disable takes priority (overrides model auto-detect)
-  if (isEnvDefinedFalsy(process.env.OPENAI_ENABLE_THINKING)) return false
-  // Explicit enable
-  if (isEnvTruthy(process.env.OPENAI_ENABLE_THINKING)) return true
-  // Auto-detect from model name (deepseek-reasoner and DeepSeek-V3.2 support thinking mode)
-  const modelLower = model.toLowerCase()
-  return modelLower.includes('deepseek-reasoner') || modelLower.includes('deepseek-v3.2')
-}
-
-/**
- * Build the request body for OpenAI chat.completions.create().
- * Extracted for testability — the thinking mode params are injected here.
- *
- * DeepSeek thinking mode: inject thinking params via request body.
- * Two formats are added simultaneously to support different deployments:
- * - Official DeepSeek API: `thinking: { type: 'enabled' }`
- * - Self-hosted DeepSeek-V3.2: `enable_thinking: true` + `chat_template_kwargs: { thinking: true }`
- * OpenAI SDK passes unknown keys through to the HTTP body.
- * Each endpoint will use the format it recognizes and ignore the others.
- * @internal Exported for testing purposes only
- */
-export function buildOpenAIRequestBody(params: {
-  model: string
-  messages: any[]
-  tools: any[]
-  toolChoice: any
-  enableThinking: boolean
-  maxTokens: number
-  temperatureOverride?: number
-}): ChatCompletionCreateParamsStreaming & {
-  thinking?: { type: string }
-  enable_thinking?: boolean
-  chat_template_kwargs?: { thinking: boolean }
-} {
-  const { model, messages, tools, toolChoice, enableThinking, maxTokens, temperatureOverride } = params
-  return {
-    model,
-    messages,
-    max_tokens: maxTokens,
-    ...(tools.length > 0 && {
-      tools,
-      ...(toolChoice && { tool_choice: toolChoice }),
-    }),
-    stream: true,
-    stream_options: { include_usage: true },
-    // DeepSeek thinking mode: enable chain-of-thought output.
-    // When active, temperature/top_p/presence_penalty/frequency_penalty are ignored by DeepSeek.
-    ...(enableThinking && {
-      // Official DeepSeek API format
-      thinking: { type: 'enabled' },
-      // Self-hosted DeepSeek-V3.2 format
-      enable_thinking: true,
-      chat_template_kwargs: { thinking: true },
-    }),
-    // Only send temperature when thinking mode is off (DeepSeek ignores it anyway,
-    // but other providers may respect it)
-    ...(!enableThinking && temperatureOverride !== undefined && {
-      temperature: temperatureOverride,
-    }),
-  }
-}
 
 /**
  * Assemble the final AssistantMessage (and optional max_tokens error) from
@@ -165,7 +83,7 @@ function assembleFinalAssistantOutputs(params: {
   if (stopReason === 'max_tokens') {
     outputs.push(createAssistantAPIErrorMessage({
       content: `Output truncated: response exceeded the ${maxTokens} token limit. ` +
-        `Set CLAUDE_CODE_MAX_OUTPUT_TOKENS to override.`,
+        `Set OPENAI_MAX_TOKENS or CLAUDE_CODE_MAX_OUTPUT_TOKENS to override.`,
       apiError: 'max_output_tokens',
       error: 'max_output_tokens',
     }))
@@ -286,8 +204,15 @@ export async function* queryModelOpenAI(
     //     auto-retry at 64k in query.ts. The OpenAI path has no such retry, so
     //     using the capped 8k default would silently truncate responses in
     //     multi-turn conversations where thinking consumes most of the budget.
+    //
+    //     Override priority:
+    //     1. options.maxOutputTokensOverride (programmatic)
+    //     2. OPENAI_MAX_TOKENS env var (OpenAI-specific, useful for local models
+    //        with small context windows, e.g. RTX 3060 12GB running 65536-token models)
+    //     3. CLAUDE_CODE_MAX_OUTPUT_TOKENS env var (generic override)
+    //     4. upperLimit default (64000)
     const { upperLimit } = getModelMaxOutputTokens(openaiModel)
-    const maxTokens = options.maxOutputTokensOverride ?? upperLimit
+    const maxTokens = resolveOpenAIMaxTokens(upperLimit, options.maxOutputTokensOverride)
 
     // 11. Get client
     const client = getOpenAIClient({

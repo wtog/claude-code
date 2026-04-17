@@ -30,6 +30,8 @@ const DEFAULT_BUILD_FEATURES = [
   'ULTRAPLAN',
   // P2: daemon + remote control server
   'DAEMON',
+  // ACP (Agent Client Protocol) agent mode
+  'ACP',
   // PR-package restored features
   'WORKFLOW_SCRIPTS',
   'HISTORY_SNIP',
@@ -40,6 +42,8 @@ const DEFAULT_BUILD_FEATURES = [
   'KAIROS',
   'COORDINATOR_MODE',
   'LAN_PIPES',
+  'BG_SESSIONS',
+  'TEMPLATES',
   // 'REVIEW_ARTIFACT', // API 请求无响应，需进一步排查 schema 兼容性
   // P3: poor mode (disable extract_memories + prompt_suggestion)
   'POOR',
