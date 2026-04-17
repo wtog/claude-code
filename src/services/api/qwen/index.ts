@@ -1,14 +1,23 @@
 import type { BetaToolUnion } from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
 import type { SystemPrompt } from '../../../utils/systemPromptType.js'
-import type { Message, StreamEvent, SystemAPIErrorMessage, AssistantMessage } from '../../../types/message.js'
+import type {
+  Message,
+  StreamEvent,
+  SystemAPIErrorMessage,
+  AssistantMessage,
+} from '../../../types/message.js'
 import type { Tools } from '../../../Tool.js'
 import type {
   ChatCompletionChunk,
   ChatCompletionCreateParamsStreaming,
 } from 'openai/resources/chat/completions/completions.mjs'
 import { getQwenClient } from './client.js'
+import { resolveQwenAuth } from './oauth.js'
 import { anthropicMessagesToOpenAI } from '../openai/convertMessages.js'
-import { anthropicToolsToOpenAI, anthropicToolChoiceToOpenAI } from '../openai/convertTools.js'
+import {
+  anthropicToolsToOpenAI,
+  anthropicToolChoiceToOpenAI,
+} from '../openai/convertTools.js'
 import { adaptOpenAIStreamToAnthropic } from '../openai/streamAdapter.js'
 import { resolveQwenModel } from './modelMapping.js'
 import { normalizeMessagesForAPI } from '../../../utils/messages.js'
@@ -41,7 +50,13 @@ export async function* queryModelQwen(
   void
 > {
   try {
-    const qwenModel = resolveQwenModel(options.model)
+    const qwenAuth = await resolveQwenAuth()
+    // portal.qwen.ai (OAuth) only serves the qwen3-coder-* / vision-model
+    // catalog — sending qwen-max there produces a misleading 401. Detect the
+    // OAuth portal by source + base URL and steer defaults accordingly.
+    const preferCoderModels =
+      qwenAuth.source === 'oauth' && /portal\.qwen\.ai/i.test(qwenAuth.baseURL)
+    const qwenModel = resolveQwenModel(options.model, { preferCoderModels })
     const messagesForAPI = normalizeMessagesForAPI(messages, tools)
 
     const toolSchemas = await Promise.all(
@@ -58,11 +73,16 @@ export async function* queryModelQwen(
     const standardTools = toolSchemas.filter(
       (t): t is BetaToolUnion & { type: string } => {
         const anyT = t as unknown as Record<string, unknown>
-        return anyT.type !== 'advisor_20260301' && anyT.type !== 'computer_20250124'
+        return (
+          anyT.type !== 'advisor_20260301' && anyT.type !== 'computer_20250124'
+        )
       },
     )
 
-    const openaiMessages = anthropicMessagesToOpenAI(messagesForAPI, systemPrompt)
+    const openaiMessages = anthropicMessagesToOpenAI(
+      messagesForAPI,
+      systemPrompt,
+    )
     const openaiTools = anthropicToolsToOpenAI(standardTools)
     const openaiToolChoice = anthropicToolChoiceToOpenAI(options.toolChoice)
 
@@ -70,9 +90,12 @@ export async function* queryModelQwen(
       maxRetries: 0,
       fetchOverride: options.fetchOverride as typeof fetch | undefined,
       source: options.querySource,
+      credentials: { apiKey: qwenAuth.apiKey, baseURL: qwenAuth.baseURL },
     })
 
-    logForDebugging(`[Qwen] Calling model=${qwenModel}, messages=${openaiMessages.length}, tools=${openaiTools.length}`)
+    logForDebugging(
+      `[Qwen] Calling model=${qwenModel}, messages=${openaiMessages.length}, tools=${openaiTools.length}`,
+    )
 
     const stream = await client.chat.completions.create(
       {
@@ -91,10 +114,13 @@ export async function* queryModelQwen(
       { signal },
     )
 
-    const adaptedStream = adaptOpenAIStreamToAnthropic(stream as AsyncIterable<ChatCompletionChunk>, qwenModel)
+    const adaptedStream = adaptOpenAIStreamToAnthropic(
+      stream as AsyncIterable<ChatCompletionChunk>,
+      qwenModel,
+    )
 
     const contentBlocks: Record<number, any> = {}
-    let partialMessage: any = undefined
+    let partialMessage: any
     let usage = {
       input_tokens: 0,
       output_tokens: 0,
@@ -110,7 +136,7 @@ export async function* queryModelQwen(
           partialMessage = (event as any).message
           ttftMs = Date.now() - start
           if ((event as any).message?.usage) {
-            usage = { ...usage, ...((event as any).message.usage) }
+            usage = { ...usage, ...(event as any).message.usage }
           }
           break
         }
@@ -173,7 +199,10 @@ export async function* queryModelQwen(
           break
       }
 
-      if (event.type === 'message_stop' && usage.input_tokens + usage.output_tokens > 0) {
+      if (
+        event.type === 'message_stop' &&
+        usage.input_tokens + usage.output_tokens > 0
+      ) {
         const costUSD = calculateUSDCost(qwenModel, usage as any)
         addToTotalSessionCost(costUSD, usage as any, options.model)
       }
@@ -190,7 +219,9 @@ export async function* queryModelQwen(
     yield createAssistantAPIErrorMessage({
       content: `API Error: ${errorMessage}`,
       apiError: 'api_error',
-      error: (error instanceof Error ? error : new Error(String(error))) as unknown as SDKAssistantMessageError,
+      error: (error instanceof Error
+        ? error
+        : new Error(String(error))) as unknown as SDKAssistantMessageError,
     })
   }
 }

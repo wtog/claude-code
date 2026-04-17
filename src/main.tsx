@@ -6135,6 +6135,36 @@ async function run(): Promise<CommanderCommand> {
 			await authLogout();
 		});
 
+	// claude qwen — OAuth for the Qwen / DashScope provider
+
+	const qwen = program
+		.command("qwen")
+		.description("Manage Qwen (chat.qwen.ai) OAuth authentication")
+		.configureHelp(createSortedHelpConfig());
+
+	qwen.command("login")
+		.description("Sign in to Qwen via OAuth device flow")
+		.option("--no-browser", "Do not automatically open the browser")
+		.action(async (opts: { browser?: boolean }) => {
+			const { qwenLogin } = await import("./cli/handlers/qwen.js");
+			await qwenLogin({ noBrowser: opts.browser === false });
+		});
+
+	qwen.command("status")
+		.description("Show Qwen authentication status")
+		.option("--json", "Output as JSON")
+		.action(async (opts: { json?: boolean }) => {
+			const { qwenStatus } = await import("./cli/handlers/qwen.js");
+			await qwenStatus(opts);
+		});
+
+	qwen.command("logout")
+		.description("Remove the stored Qwen OAuth session")
+		.action(async () => {
+			const { qwenLogout } = await import("./cli/handlers/qwen.js");
+			await qwenLogout();
+		});
+
 	/**
 	 * Helper function to handle marketplace command errors consistently.
 	 * Logs the error and exits the process with status 1.
