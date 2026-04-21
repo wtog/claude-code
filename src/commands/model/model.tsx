@@ -29,19 +29,27 @@ import {
 } from '../../utils/model/model.js'
 import { isModelAllowed } from '../../utils/model/modelAllowlist.js'
 import {
+  isDeepSeekModelId,
+  isKimiModelId,
+  SWITCH_PROVIDER_ANTHROPIC,
   SWITCH_PROVIDER_DEEPSEEK,
+  SWITCH_PROVIDER_KIMI,
   SWITCH_PROVIDER_QWEN,
 } from '../../utils/model/modelOptions.js'
+import { getAPIProvider } from '../../utils/model/providers.js'
 import { validateModel } from '../../utils/model/validateModel.js'
 import { updateSettingsForSource } from '../../utils/settings/settings.js'
+import { clearDeepSeekClientCache } from '../../services/api/deepseek/client.js'
+import { clearKimiClientCache } from '../../services/api/kimi/client.js'
 import { clearQwenClientCache } from '../../services/api/qwen/client.js'
 import { loadQwenOAuthTokens } from '../../services/api/qwen/oauth.js'
 import {
   DeepSeekLoginFlow,
+  KimiLoginFlow,
   QwenLoginFlow,
 } from './providerLoginFlow.js'
 
-type ProviderSwitchKind = 'qwen' | 'deepseek'
+type ProviderSwitchKind = 'anthropic' | 'qwen' | 'deepseek' | 'kimi'
 
 function parseProviderSwitch(
   model: string | null | undefined,
@@ -49,8 +57,10 @@ function parseProviderSwitch(
   if (!model) return null
   // Tolerate the [1m] suffix that ModelPicker may append if the user toggles it.
   const bare = model.replace(/\[1m\]$/i, '')
+  if (bare === SWITCH_PROVIDER_ANTHROPIC) return 'anthropic'
   if (bare === SWITCH_PROVIDER_QWEN) return 'qwen'
   if (bare === SWITCH_PROVIDER_DEEPSEEK) return 'deepseek'
+  if (bare === SWITCH_PROVIDER_KIMI) return 'kimi'
   return null
 }
 
@@ -63,13 +73,29 @@ function clearProviderEnvOverrides(): void {
   delete process.env.CLAUDE_CODE_USE_GROK
   delete process.env.CLAUDE_CODE_USE_DEEPSEEK
   delete process.env.CLAUDE_CODE_USE_QWEN
+  delete process.env.CLAUDE_CODE_USE_KIMI
 }
 
+type LoginCapableProvider = 'qwen' | 'deepseek' | 'kimi'
 type ProviderSwitchResult =
   | { outcome: 'switched'; message: string }
-  | { outcome: 'needs-login'; provider: ProviderSwitchKind }
+  | { outcome: 'needs-login'; provider: LoginCapableProvider }
 
 function tryProviderSwitch(kind: ProviderSwitchKind): ProviderSwitchResult {
+  if (kind === 'anthropic') {
+    updateSettingsForSource('userSettings', {
+      modelType: 'anthropic',
+    } as Record<string, unknown>)
+    clearProviderEnvOverrides()
+    clearQwenClientCache()
+    clearDeepSeekClientCache()
+    clearKimiClientCache()
+    return {
+      outcome: 'switched',
+      message: `Switched API provider to ${chalk.bold('Anthropic Claude')}`,
+    }
+  }
+
   if (kind === 'qwen') {
     const tokens = loadQwenOAuthTokens()
     const envKey = process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY
@@ -90,18 +116,35 @@ function tryProviderSwitch(kind: ProviderSwitchKind): ProviderSwitchResult {
     }
   }
 
-  // deepseek
-  if (!process.env.DEEPSEEK_API_KEY) {
-    return { outcome: 'needs-login', provider: 'deepseek' }
+  if (kind === 'deepseek') {
+    if (!process.env.DEEPSEEK_API_KEY) {
+      return { outcome: 'needs-login', provider: 'deepseek' }
+    }
+    updateSettingsForSource('userSettings', {
+      modelType: 'deepseek',
+    } as Record<string, unknown>)
+    clearProviderEnvOverrides()
+    process.env.CLAUDE_CODE_USE_DEEPSEEK = '1'
+    clearDeepSeekClientCache()
+    return {
+      outcome: 'switched',
+      message: `Switched API provider to ${chalk.bold('DeepSeek')}`,
+    }
+  }
+
+  // kimi
+  if (!process.env.KIMI_API_KEY && !process.env.MOONSHOT_API_KEY) {
+    return { outcome: 'needs-login', provider: 'kimi' }
   }
   updateSettingsForSource('userSettings', {
-    modelType: 'deepseek',
+    modelType: 'kimi',
   } as Record<string, unknown>)
   clearProviderEnvOverrides()
-  process.env.CLAUDE_CODE_USE_DEEPSEEK = '1'
+  process.env.CLAUDE_CODE_USE_KIMI = '1'
+  clearKimiClientCache()
   return {
     outcome: 'switched',
-    message: `Switched API provider to ${chalk.bold('DeepSeek')}`,
+    message: `Switched API provider to ${chalk.bold('Kimi (月之暗面)')}`,
   }
 }
 
@@ -117,11 +160,23 @@ function ModelPickerWrapper({
   const mainLoopModelForSession = useAppState(s => s.mainLoopModelForSession)
   const isFastMode = useAppState(s => s.fastMode)
   const setAppState = useSetAppState()
-  const [loginStage, setLoginStage] =
-    React.useState<ProviderSwitchKind | null>(null)
+  const [loginStage, setLoginStage] = React.useState<
+    'qwen' | 'deepseek' | 'kimi' | null
+  >(null)
+  const [pendingKimiModel, setPendingKimiModel] = React.useState<
+    string | undefined
+  >(undefined)
+  const [pendingDeepSeekModel, setPendingDeepSeekModel] = React.useState<
+    string | undefined
+  >(undefined)
 
   if (loginStage === 'qwen') return <QwenLoginFlow onDone={onDone} />
-  if (loginStage === 'deepseek') return <DeepSeekLoginFlow onDone={onDone} />
+  if (loginStage === 'deepseek')
+    return (
+      <DeepSeekLoginFlow onDone={onDone} targetModel={pendingDeepSeekModel} />
+    )
+  if (loginStage === 'kimi')
+    return <KimiLoginFlow onDone={onDone} targetModel={pendingKimiModel} />
 
   function handleCancel(): void {
     logEvent('tengu_model_command_menu', {
@@ -151,11 +206,81 @@ function ModelPickerWrapper({
     if (providerKind) {
       const result = tryProviderSwitch(providerKind)
       if (result.outcome === 'switched') {
+        // Switching back to Anthropic also clears any third-party model
+        // pin so /model re-converges on the Claude family default.
+        if (providerKind === 'anthropic') {
+          setAppState(prev => ({
+            ...prev,
+            mainLoopModel: null,
+            mainLoopModelForSession: null,
+          }))
+        }
         onDone(result.message)
       } else {
         // Pivot this component to the appropriate inline login flow.
+        // `tryProviderSwitch` only returns `needs-login` for Qwen/DeepSeek/Kimi.
         setLoginStage(result.provider)
       }
+      return
+    }
+
+    // Explicit Kimi model selection (e.g. `kimi-k2.6`). Ensure the Kimi
+    // provider is active — if creds are missing, pivot to the inline Kimi
+    // login flow and carry the target model through it.
+    if (model && isKimiModelId(model)) {
+      const onKimi = getAPIProvider() === 'kimi'
+      const hasCreds = !!(
+        process.env.KIMI_API_KEY || process.env.MOONSHOT_API_KEY
+      )
+      if (!hasCreds) {
+        setPendingKimiModel(model)
+        setLoginStage('kimi')
+        return
+      }
+      if (!onKimi) {
+        updateSettingsForSource('userSettings', {
+          modelType: 'kimi',
+        } as Record<string, unknown>)
+        clearProviderEnvOverrides()
+        process.env.CLAUDE_CODE_USE_KIMI = '1'
+        clearKimiClientCache()
+      }
+      setAppState(prev => ({
+        ...prev,
+        mainLoopModel: model,
+        mainLoopModelForSession: null,
+      }))
+      onDone(
+        `Set model to ${chalk.bold(model)} on ${chalk.bold('Kimi (月之暗面)')}`,
+      )
+      return
+    }
+
+    // Explicit DeepSeek model selection (e.g. `deepseek-chat`). Same
+    // logic as Kimi: auto-switch provider, log in inline if no creds.
+    if (model && isDeepSeekModelId(model)) {
+      const onDeepSeek = getAPIProvider() === 'deepseek'
+      if (!process.env.DEEPSEEK_API_KEY) {
+        setPendingDeepSeekModel(model)
+        setLoginStage('deepseek')
+        return
+      }
+      if (!onDeepSeek) {
+        updateSettingsForSource('userSettings', {
+          modelType: 'deepseek',
+        } as Record<string, unknown>)
+        clearProviderEnvOverrides()
+        process.env.CLAUDE_CODE_USE_DEEPSEEK = '1'
+        clearDeepSeekClientCache()
+      }
+      setAppState(prev => ({
+        ...prev,
+        mainLoopModel: model,
+        mainLoopModelForSession: null,
+      }))
+      onDone(
+        `Set model to ${chalk.bold(model)} on ${chalk.bold('DeepSeek')}`,
+      )
       return
     }
 
@@ -239,8 +364,15 @@ function SetModelAndClose({
   const isFastMode = useAppState(s => s.fastMode)
   const setAppState = useSetAppState()
   const model = args === 'default' ? null : args
-  const [loginStage, setLoginStage] =
-    React.useState<ProviderSwitchKind | null>(null)
+  const [loginStage, setLoginStage] = React.useState<
+    LoginCapableProvider | null
+  >(null)
+  const [pendingKimiModel, setPendingKimiModel] = React.useState<
+    string | undefined
+  >(undefined)
+  const [pendingDeepSeekModel, setPendingDeepSeekModel] = React.useState<
+    string | undefined
+  >(undefined)
 
   React.useEffect(() => {
     async function handleModelChange(): Promise<void> {
@@ -248,10 +380,70 @@ function SetModelAndClose({
       if (providerKind) {
         const result = tryProviderSwitch(providerKind)
         if (result.outcome === 'switched') {
+          if (providerKind === 'anthropic') {
+            setAppState(prev => ({
+              ...prev,
+              mainLoopModel: null,
+              mainLoopModelForSession: null,
+            }))
+          }
           onDone(result.message)
         } else {
           setLoginStage(result.provider)
         }
+        return
+      }
+
+      if (model && isKimiModelId(model)) {
+        const hasCreds = !!(
+          process.env.KIMI_API_KEY || process.env.MOONSHOT_API_KEY
+        )
+        if (!hasCreds) {
+          setPendingKimiModel(model)
+          setLoginStage('kimi')
+          return
+        }
+        if (getAPIProvider() !== 'kimi') {
+          updateSettingsForSource('userSettings', {
+            modelType: 'kimi',
+          } as Record<string, unknown>)
+          clearProviderEnvOverrides()
+          process.env.CLAUDE_CODE_USE_KIMI = '1'
+          clearKimiClientCache()
+        }
+        setAppState(prev => ({
+          ...prev,
+          mainLoopModel: model,
+          mainLoopModelForSession: null,
+        }))
+        onDone(
+          `Set model to ${chalk.bold(model)} on ${chalk.bold('Kimi (月之暗面)')}`,
+        )
+        return
+      }
+
+      if (model && isDeepSeekModelId(model)) {
+        if (!process.env.DEEPSEEK_API_KEY) {
+          setPendingDeepSeekModel(model)
+          setLoginStage('deepseek')
+          return
+        }
+        if (getAPIProvider() !== 'deepseek') {
+          updateSettingsForSource('userSettings', {
+            modelType: 'deepseek',
+          } as Record<string, unknown>)
+          clearProviderEnvOverrides()
+          process.env.CLAUDE_CODE_USE_DEEPSEEK = '1'
+          clearDeepSeekClientCache()
+        }
+        setAppState(prev => ({
+          ...prev,
+          mainLoopModel: model,
+          mainLoopModelForSession: null,
+        }))
+        onDone(
+          `Set model to ${chalk.bold(model)} on ${chalk.bold('DeepSeek')}`,
+        )
         return
       }
 
@@ -358,7 +550,12 @@ function SetModelAndClose({
   }, [model, onDone, setAppState])
 
   if (loginStage === 'qwen') return <QwenLoginFlow onDone={onDone} />
-  if (loginStage === 'deepseek') return <DeepSeekLoginFlow onDone={onDone} />
+  if (loginStage === 'deepseek')
+    return (
+      <DeepSeekLoginFlow onDone={onDone} targetModel={pendingDeepSeekModel} />
+    )
+  if (loginStage === 'kimi')
+    return <KimiLoginFlow onDone={onDone} targetModel={pendingKimiModel} />
   return null
 }
 
@@ -431,13 +628,16 @@ export const call: LocalJSXCommandCall = async (onDone, _context, args) => {
     logEvent('tengu_model_command_inline', {
       args: args as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
     })
-    // Shorthand: `/model qwen` / `/model deepseek` switches provider.
+    // Shorthand: `/model qwen` / `/model deepseek` / `/model kimi` switches
+    // provider.
     const lowered = args.toLowerCase()
     const resolved =
       lowered === 'qwen'
         ? SWITCH_PROVIDER_QWEN
         : lowered === 'deepseek'
         ? SWITCH_PROVIDER_DEEPSEEK
+        : lowered === 'kimi' || lowered === 'moonshot'
+        ? SWITCH_PROVIDER_KIMI
         : args
     return <SetModelAndClose args={resolved} onDone={onDone} />
   }

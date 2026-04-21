@@ -7,6 +7,7 @@ import { Spinner } from '../../components/Spinner.js'
 import { useKeybinding } from '../../keybindings/useKeybinding.js'
 import { useTerminalSize } from '../../hooks/useTerminalSize.js'
 import { clearDeepSeekClientCache } from '../../services/api/deepseek/client.js'
+import { clearKimiClientCache } from '../../services/api/kimi/client.js'
 import { clearQwenClientCache } from '../../services/api/qwen/client.js'
 import {
   loginQwen,
@@ -18,6 +19,7 @@ import {
   getSettingsForSource,
   updateSettingsForSource,
 } from '../../utils/settings/settings.js'
+import { useSetAppState } from '../../state/AppState.js'
 
 type OnDone = (
   result?: string,
@@ -198,14 +200,22 @@ type DeepSeekState =
 
 export function DeepSeekLoginFlow({
   onDone,
+  targetModel,
 }: {
   onDone: OnDone
+  /**
+   * Optional DeepSeek model ID (e.g. `deepseek-chat`) to pin as
+   * `mainLoopModel` after a successful login. When omitted, only the
+   * provider switch is applied.
+   */
+  targetModel?: string
 }): React.ReactNode {
   const [apiKey, setApiKey] = useState('')
   const [cursorOffset, setCursorOffset] = useState(0)
   const [state, setState] = useState<DeepSeekState>({ kind: 'input' })
   const finalizedRef = useRef(false)
   const { columns } = useTerminalSize()
+  const setAppState = useSetAppState()
 
   const handleSubmit = useCallback(
     (value: string) => {
@@ -241,21 +251,32 @@ export function DeepSeekLoginFlow({
       clearProviderEnvOverrides()
       process.env.CLAUDE_CODE_USE_DEEPSEEK = '1'
       clearDeepSeekClientCache()
+      if (targetModel) {
+        setAppState(prev => ({
+          ...prev,
+          mainLoopModel: targetModel,
+          mainLoopModelForSession: null,
+        }))
+      }
       setState({ kind: 'saved' })
     },
-    [],
+    [targetModel, setAppState],
   )
 
   useEffect(() => {
     if (finalizedRef.current) return
     if (state.kind === 'saved') {
       finalizedRef.current = true
-      onDone('Switched API provider to DeepSeek · API key saved to userSettings')
+      onDone(
+        targetModel
+          ? `Switched to DeepSeek · ${targetModel} · API key saved`
+          : 'Switched API provider to DeepSeek · API key saved to userSettings',
+      )
     } else if (state.kind === 'cancelled') {
       finalizedRef.current = true
       onDone('DeepSeek setup cancelled', { display: 'system' })
     }
-  }, [state, onDone])
+  }, [state, onDone, targetModel])
 
   useKeybinding(
     'select:cancel',
@@ -284,6 +305,143 @@ export function DeepSeekLoginFlow({
       </Text>
       <Box marginTop={1}>
         <Text>DEEPSEEK_API_KEY: </Text>
+        <TextInput
+          value={apiKey}
+          onChange={setApiKey}
+          onSubmit={handleSubmit}
+          cursorOffset={cursorOffset}
+          onChangeCursorOffset={setCursorOffset}
+          mask="•"
+          showCursor
+          columns={Math.max(40, columns - 20)}
+          multiline={false}
+        />
+      </Box>
+      {state.error && (
+        <Box marginTop={1}>
+          <Text color="error">{state.error}</Text>
+        </Box>
+      )}
+      <Text dimColor italic>
+        Enter to save · Esc to cancel
+      </Text>
+    </Box>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Kimi (Moonshot AI) API-key input
+// ---------------------------------------------------------------------------
+
+type KimiState =
+  | { kind: 'input'; error?: string }
+  | { kind: 'saved' }
+  | { kind: 'cancelled' }
+
+export function KimiLoginFlow({
+  onDone,
+  targetModel,
+}: {
+  onDone: OnDone
+  /**
+   * Optional Kimi model ID (e.g. `kimi-k2.6`) to pin as `mainLoopModel`
+   * after a successful login. When omitted, only the provider switch is
+   * applied and the existing `mainLoopModel` is left in place.
+   */
+  targetModel?: string
+}): React.ReactNode {
+  const [apiKey, setApiKey] = useState('')
+  const [cursorOffset, setCursorOffset] = useState(0)
+  const [state, setState] = useState<KimiState>({ kind: 'input' })
+  const finalizedRef = useRef(false)
+  const { columns } = useTerminalSize()
+  const setAppState = useSetAppState()
+
+  const handleSubmit = useCallback(
+    (value: string) => {
+      const trimmed = value.trim()
+      if (!trimmed) {
+        setState({ kind: 'input', error: 'API key cannot be empty.' })
+        return
+      }
+
+      const existing = getSettingsForSource('userSettings') || {}
+      const existingEnv =
+        (existing.env as Record<string, string> | undefined) || {}
+      const env: Record<string, string> = {
+        ...existingEnv,
+        KIMI_API_KEY: trimmed,
+      }
+      const { error } = updateSettingsForSource('userSettings', {
+        modelType: 'kimi',
+        env,
+      } as Record<string, unknown>)
+      if (error) {
+        setState({
+          kind: 'input',
+          error: `Failed to save settings: ${error.message}`,
+        })
+        return
+      }
+
+      process.env.KIMI_API_KEY = trimmed
+      clearProviderEnvOverrides()
+      process.env.CLAUDE_CODE_USE_KIMI = '1'
+      clearKimiClientCache()
+      if (targetModel) {
+        setAppState(prev => ({
+          ...prev,
+          mainLoopModel: targetModel,
+          mainLoopModelForSession: null,
+        }))
+      }
+      setState({ kind: 'saved' })
+    },
+    [targetModel, setAppState],
+  )
+
+  useEffect(() => {
+    if (finalizedRef.current) return
+    if (state.kind === 'saved') {
+      finalizedRef.current = true
+      onDone(
+        targetModel
+          ? `Switched to Kimi · ${targetModel} · API key saved`
+          : 'Switched API provider to Kimi · API key saved to userSettings',
+      )
+    } else if (state.kind === 'cancelled') {
+      finalizedRef.current = true
+      onDone('Kimi setup cancelled', { display: 'system' })
+    }
+  }, [state, onDone, targetModel])
+
+  useKeybinding(
+    'select:cancel',
+    () => {
+      if (!finalizedRef.current) setState({ kind: 'cancelled' })
+    },
+    {
+      context: 'KimiLogin',
+      isActive: state.kind === 'input',
+    },
+  )
+
+  if (state.kind !== 'input') return null
+
+  return (
+    <Box flexDirection="column">
+      <Text bold color="remember">
+        Configure Kimi (月之暗面)
+      </Text>
+      <Text dimColor>
+        Paste your API key from{' '}
+        <Link url="https://platform.moonshot.cn/console/api-keys">
+          platform.moonshot.cn/console/api-keys
+        </Link>
+        . It will be saved to ~/.claude/settings.json under the `env` field.
+      </Text>
+      <Box marginTop={1}>
+        <Text>KIMI_API_KEY: </Text>
         <TextInput
           value={apiKey}
           onChange={setApiKey}

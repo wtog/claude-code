@@ -50,11 +50,15 @@ export type ModelOption = {
  * select handler intercepts the sentinel, checks credentials for that provider,
  * and either persists `modelType` to user settings or prints a login hint.
  */
+export const SWITCH_PROVIDER_ANTHROPIC = '__switch-provider:anthropic'
 export const SWITCH_PROVIDER_QWEN = '__switch-provider:qwen'
 export const SWITCH_PROVIDER_DEEPSEEK = '__switch-provider:deepseek'
+export const SWITCH_PROVIDER_KIMI = '__switch-provider:kimi'
 export const SWITCH_PROVIDER_VALUES: readonly string[] = [
+  SWITCH_PROVIDER_ANTHROPIC,
   SWITCH_PROVIDER_QWEN,
   SWITCH_PROVIDER_DEEPSEEK,
+  SWITCH_PROVIDER_KIMI,
 ]
 
 export function isSwitchProviderValue(value: unknown): value is string {
@@ -72,6 +76,11 @@ export function getQwenAuthState(): ProviderAuthState {
 
 export function getDeepSeekAuthState(): ProviderAuthState {
   if (process.env.DEEPSEEK_API_KEY) return 'apiKey'
+  return 'none'
+}
+
+export function getKimiAuthState(): ProviderAuthState {
+  if (process.env.KIMI_API_KEY || process.env.MOONSHOT_API_KEY) return 'apiKey'
   return 'none'
 }
 
@@ -95,6 +104,16 @@ function formatProviderStatus(
   return parts.join(' · ')
 }
 
+function getAnthropicProviderOption(): ModelOption {
+  return {
+    value: SWITCH_PROVIDER_ANTHROPIC,
+    label: 'Anthropic Claude',
+    description: 'Switch back to the Anthropic API (opus/sonnet/haiku)',
+    descriptionForModel:
+      'Switch API provider back to Anthropic. Resets modelType and routes requests to the Anthropic API.',
+  }
+}
+
 function getQwenProviderOption(): ModelOption {
   const active = getAPIProvider() === 'qwen'
   const auth = getQwenAuthState()
@@ -107,16 +126,78 @@ function getQwenProviderOption(): ModelOption {
   }
 }
 
-function getDeepSeekProviderOption(): ModelOption {
+/**
+ * Explicit DeepSeek model IDs exposed in the /model picker. Selecting one
+ * of these both switches the API provider to DeepSeek and pins
+ * `mainLoopModel` to that exact ID.
+ */
+export const DEEPSEEK_MODEL_IDS = ['deepseek-chat', 'deepseek-reasoner'] as const
+export type DeepSeekModelId = (typeof DEEPSEEK_MODEL_IDS)[number]
+
+export function isDeepSeekModelId(value: unknown): value is DeepSeekModelId {
+  return (
+    typeof value === 'string' &&
+    (DEEPSEEK_MODEL_IDS as readonly string[]).includes(value)
+  )
+}
+
+function getDeepSeekModelOptions(): ModelOption[] {
   const active = getAPIProvider() === 'deepseek'
   const auth = getDeepSeekAuthState()
-  return {
-    value: SWITCH_PROVIDER_DEEPSEEK,
-    label: 'DeepSeek',
-    description: `DeepSeek Chat / Reasoner via api.deepseek.com · ${formatProviderStatus(active, auth)}`,
-    descriptionForModel:
-      'Switch API provider to DeepSeek. Requires DEEPSEEK_API_KEY.',
-  }
+  const status = formatProviderStatus(active, auth)
+  return [
+    {
+      value: 'deepseek-chat',
+      label: 'DeepSeek Chat (V3)',
+      description: `DeepSeek V3 · best for everyday tasks · ${status}`,
+      descriptionForModel:
+        'DeepSeek V3 chat model — best for most coding and everyday tasks.',
+    },
+    {
+      value: 'deepseek-reasoner',
+      label: 'DeepSeek Reasoner (R1)',
+      description: `DeepSeek R1 · chain-of-thought reasoning · ${status}`,
+      descriptionForModel:
+        'DeepSeek R1 reasoning model — adds explicit reasoning / thinking mode.',
+    },
+  ]
+}
+
+/**
+ * Explicit Kimi model IDs exposed in the /model picker. Selecting one of
+ * these both switches the API provider to Kimi and pins `mainLoopModel`
+ * to that exact ID — no alias → model mapping required.
+ */
+export const KIMI_MODEL_IDS = ['kimi-k2.6', 'kimi-k2.5'] as const
+export type KimiModelId = (typeof KIMI_MODEL_IDS)[number]
+
+export function isKimiModelId(value: unknown): value is KimiModelId {
+  return (
+    typeof value === 'string' &&
+    (KIMI_MODEL_IDS as readonly string[]).includes(value)
+  )
+}
+
+function getKimiModelOptions(): ModelOption[] {
+  const active = getAPIProvider() === 'kimi'
+  const auth = getKimiAuthState()
+  const status = formatProviderStatus(active, auth)
+  return [
+    {
+      value: 'kimi-k2.6',
+      label: 'Kimi K2.6',
+      description: `Moonshot AI · most capable · ${status}`,
+      descriptionForModel:
+        'Kimi K2.6 from Moonshot AI — most capable Kimi model',
+    },
+    {
+      value: 'kimi-k2.5',
+      label: 'Kimi K2.5',
+      description: `Moonshot AI · faster / cheaper · ${status}`,
+      descriptionForModel:
+        'Kimi K2.5 from Moonshot AI — lower cost than K2.6',
+    },
+  ]
 }
 
 export function getDefaultOptionForUser(fastMode = false): ModelOption {
@@ -400,6 +481,18 @@ function getOpusPlanOption(): ModelOption {
 // @[MODEL LAUNCH]: Update the model picker lists below to include/reorder options for the new model.
 // Each user tier (ant, Max/Team Premium, Pro/Team Standard/Enterprise, PAYG 1P, PAYG 3P) has its own list.
 function getModelOptionsBase(fastMode = false): ModelOption[] {
+  // Provider-scoped pickers: when the user is actively on Kimi or DeepSeek
+  // the picker lists only that provider's native models. "Default" still
+  // means "Anthropic alias resolved via fallback mapping" — preserved so
+  // scripts that pin `mainLoopModel=sonnet` keep working.
+  const provider = getAPIProvider()
+  if (provider === 'kimi') {
+    return [getDefaultOptionForUser(fastMode), ...getKimiModelOptions()]
+  }
+  if (provider === 'deepseek') {
+    return [getDefaultOptionForUser(fastMode), ...getDeepSeekModelOptions()]
+  }
+
   if (process.env.USER_TYPE === 'ant') {
     // Build options from antModels config
     const antModelOptions: ModelOption[] = getAntModels().map(m => ({
@@ -614,11 +707,23 @@ export function getModelOptions(fastMode = false): ModelOption[] {
     }
   }
 
-  // Provider-switch entries (Qwen / DeepSeek). These are sentinel values —
-  // selecting them is intercepted in the /model command handler, which
-  // either switches `modelType` in userSettings or prints a login hint.
-  options.push(getQwenProviderOption())
-  options.push(getDeepSeekProviderOption())
+  // Cross-provider entries. Each branch is only added when the user is
+  // NOT currently on that provider, so the picker stays scoped: on Kimi
+  // you won't see Kimi entries a second time, on DeepSeek you won't see
+  // DeepSeek entries, etc.
+  const currentProvider = getAPIProvider()
+  if (currentProvider !== 'firstParty') {
+    options.push(getAnthropicProviderOption())
+  }
+  if (currentProvider !== 'kimi') {
+    for (const opt of getKimiModelOptions()) options.push(opt)
+  }
+  if (currentProvider !== 'deepseek') {
+    for (const opt of getDeepSeekModelOptions()) options.push(opt)
+  }
+  if (currentProvider !== 'qwen') {
+    options.push(getQwenProviderOption())
+  }
 
   // Add custom model from either the current model value or the initial one
   // if it is not already in the options.

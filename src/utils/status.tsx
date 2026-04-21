@@ -344,6 +344,7 @@ export function buildAPIProviderProperties(): Property[] {
       openai: 'OpenAI API',
       deepseek: 'DeepSeek API',
       qwen: 'Qwen API',
+      kimi: 'Kimi API (Moonshot)',
     }[apiProvider]
     properties.push({
       label: 'API provider',

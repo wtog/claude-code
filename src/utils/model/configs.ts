@@ -16,6 +16,7 @@ export const CLAUDE_3_7_SONNET_CONFIG = {
   grok: 'claude-3-7-sonnet-20250219',
   deepseek: 'claude-3-7-sonnet-20250219',
   qwen: 'claude-3-7-sonnet-20250219',
+  kimi: 'claude-3-7-sonnet-20250219',
 } as const satisfies ModelConfig
 
 export const CLAUDE_3_5_V2_SONNET_CONFIG = {
@@ -28,6 +29,7 @@ export const CLAUDE_3_5_V2_SONNET_CONFIG = {
   grok: 'claude-3-5-sonnet-20241022',
   deepseek: 'claude-3-5-sonnet-20241022',
   qwen: 'claude-3-5-sonnet-20241022',
+  kimi: 'claude-3-5-sonnet-20241022',
 } as const satisfies ModelConfig
 
 export const CLAUDE_3_5_HAIKU_CONFIG = {
@@ -40,6 +42,7 @@ export const CLAUDE_3_5_HAIKU_CONFIG = {
   grok: 'claude-3-5-haiku-20241022',
   deepseek: 'claude-3-5-haiku-20241022',
   qwen: 'claude-3-5-haiku-20241022',
+  kimi: 'claude-3-5-haiku-20241022',
 } as const satisfies ModelConfig
 
 export const CLAUDE_HAIKU_4_5_CONFIG = {
@@ -52,6 +55,7 @@ export const CLAUDE_HAIKU_4_5_CONFIG = {
   grok: 'claude-haiku-4-5-20251001',
   deepseek: 'claude-haiku-4-5-20251001',
   qwen: 'claude-haiku-4-5-20251001',
+  kimi: 'claude-haiku-4-5-20251001',
 } as const satisfies ModelConfig
 
 export const CLAUDE_SONNET_4_CONFIG = {
@@ -64,6 +68,7 @@ export const CLAUDE_SONNET_4_CONFIG = {
   grok: 'claude-sonnet-4-20250514',
   deepseek: 'claude-sonnet-4-20250514',
   qwen: 'claude-sonnet-4-20250514',
+  kimi: 'claude-sonnet-4-20250514',
 } as const satisfies ModelConfig
 
 export const CLAUDE_SONNET_4_5_CONFIG = {
@@ -76,6 +81,7 @@ export const CLAUDE_SONNET_4_5_CONFIG = {
   grok: 'claude-sonnet-4-5-20250929',
   deepseek: 'claude-sonnet-4-5-20250929',
   qwen: 'claude-sonnet-4-5-20250929',
+  kimi: 'claude-sonnet-4-5-20250929',
 } as const satisfies ModelConfig
 
 export const CLAUDE_OPUS_4_CONFIG = {
@@ -88,6 +94,7 @@ export const CLAUDE_OPUS_4_CONFIG = {
   grok: 'claude-opus-4-20250514',
   deepseek: 'claude-opus-4-20250514',
   qwen: 'claude-opus-4-20250514',
+  kimi: 'claude-opus-4-20250514',
 } as const satisfies ModelConfig
 
 export const CLAUDE_OPUS_4_1_CONFIG = {
@@ -100,6 +107,7 @@ export const CLAUDE_OPUS_4_1_CONFIG = {
   grok: 'claude-opus-4-1-20250805',
   deepseek: 'claude-opus-4-1-20250805',
   qwen: 'claude-opus-4-1-20250805',
+  kimi: 'claude-opus-4-1-20250805',
 } as const satisfies ModelConfig
 
 export const CLAUDE_OPUS_4_5_CONFIG = {
@@ -112,6 +120,7 @@ export const CLAUDE_OPUS_4_5_CONFIG = {
   grok: 'claude-opus-4-5-20251101',
   deepseek: 'claude-opus-4-5-20251101',
   qwen: 'claude-opus-4-5-20251101',
+  kimi: 'claude-opus-4-5-20251101',
 } as const satisfies ModelConfig
 
 export const CLAUDE_OPUS_4_6_CONFIG = {
@@ -124,6 +133,7 @@ export const CLAUDE_OPUS_4_6_CONFIG = {
   grok: 'claude-opus-4-6',
   deepseek: 'claude-opus-4-6',
   qwen: 'claude-opus-4-6',
+  kimi: 'claude-opus-4-6',
 } as const satisfies ModelConfig
 
 export const CLAUDE_SONNET_4_6_CONFIG = {
@@ -136,6 +146,7 @@ export const CLAUDE_SONNET_4_6_CONFIG = {
   grok: 'claude-sonnet-4-6',
   deepseek: 'claude-sonnet-4-6',
   qwen: 'claude-sonnet-4-6',
+  kimi: 'claude-sonnet-4-6',
 } as const satisfies ModelConfig
 
 // @[MODEL LAUNCH]: Register the new config here.

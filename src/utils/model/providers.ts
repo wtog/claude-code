@@ -12,6 +12,7 @@ export type APIProvider =
   | 'grok'
   | 'deepseek'
   | 'qwen'
+  | 'kimi'
 
 export function getAPIProvider(): APIProvider {
   const modelType = getInitialSettings().modelType
@@ -20,6 +21,7 @@ export function getAPIProvider(): APIProvider {
   if (modelType === 'grok') return 'grok'
   if (modelType === 'deepseek') return 'deepseek'
   if (modelType === 'qwen') return 'qwen'
+  if (modelType === 'kimi') return 'kimi'
 
   if (isEnvTruthy(process.env.CLAUDE_CODE_USE_BEDROCK)) return 'bedrock'
   if (isEnvTruthy(process.env.CLAUDE_CODE_USE_VERTEX)) return 'vertex'
@@ -30,6 +32,7 @@ export function getAPIProvider(): APIProvider {
   if (isEnvTruthy(process.env.CLAUDE_CODE_USE_GROK)) return 'grok'
   if (isEnvTruthy(process.env.CLAUDE_CODE_USE_DEEPSEEK)) return 'deepseek'
   if (isEnvTruthy(process.env.CLAUDE_CODE_USE_QWEN)) return 'qwen'
+  if (isEnvTruthy(process.env.CLAUDE_CODE_USE_KIMI)) return 'kimi'
 
   return 'firstParty'
 }

@@ -373,12 +373,13 @@ export const SettingsSchema = lazySchema(() =>
         .optional()
         .describe('Tool usage permissions configuration'),
       modelType: z
-        .enum(['anthropic', 'openai', 'gemini', 'grok', 'deepseek', 'qwen'])
+        .enum(['anthropic', 'openai', 'gemini', 'grok', 'deepseek', 'qwen', 'kimi'])
         .optional()
         .describe(
-          'API provider type. "anthropic" uses the Anthropic API (default), "openai" uses the OpenAI Chat Completions API, "gemini" uses the Gemini API, "grok" uses the xAI Grok API, "deepseek" uses the DeepSeek API, and "qwen" uses the Qwen (通义千问) API via DashScope. ' +
+          'API provider type. "anthropic" uses the Anthropic API (default), "openai" uses the OpenAI Chat Completions API, "gemini" uses the Gemini API, "grok" uses the xAI Grok API, "deepseek" uses the DeepSeek API, "qwen" uses the Qwen (通义千问) API via DashScope, and "kimi" uses the Moonshot Kimi API. ' +
             'When set to "openai", configure OPENAI_API_KEY, OPENAI_BASE_URL, and OPENAI_MODEL. When set to "gemini", configure GEMINI_API_KEY and optional GEMINI_BASE_URL. When set to "grok", configure GROK_API_KEY (or XAI_API_KEY), optional GROK_BASE_URL, GROK_MODEL, and GROK_MODEL_MAP. ' +
-            'When set to "deepseek", configure DEEPSEEK_API_KEY, optional DEEPSEEK_BASE_URL and DEEPSEEK_MODEL. When set to "qwen", configure QWEN_API_KEY (or DASHSCOPE_API_KEY), optional QWEN_BASE_URL and QWEN_MODEL.',
+            'When set to "deepseek", configure DEEPSEEK_API_KEY, optional DEEPSEEK_BASE_URL and DEEPSEEK_MODEL. When set to "qwen", configure QWEN_API_KEY (or DASHSCOPE_API_KEY), optional QWEN_BASE_URL and QWEN_MODEL. ' +
+            'When set to "kimi", configure KIMI_API_KEY (or MOONSHOT_API_KEY), optional KIMI_BASE_URL and KIMI_MODEL.',
         ),
       model: z
         .string()

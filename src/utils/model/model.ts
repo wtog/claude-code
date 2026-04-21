@@ -27,6 +27,7 @@ import type { PermissionMode } from '../permissions/PermissionMode.js'
 import { getAPIProvider } from './providers.js'
 import { resolveDeepSeekModel } from '../../services/api/deepseek/modelMapping.js'
 import { resolveQwenModel } from '../../services/api/qwen/modelMapping.js'
+import { resolveKimiModel } from '../../services/api/kimi/modelMapping.js'
 import {
   resolveOpenAIModel,
   resolveGrokModel,
@@ -451,6 +452,8 @@ export function renderModelName(model: ModelName): string {
       return resolveDeepSeekModel(model)
     case 'qwen':
       return resolveQwenModel(model)
+    case 'kimi':
+      return resolveKimiModel(model)
     case 'openai':
       return resolveOpenAIModel(model)
     case 'grok':

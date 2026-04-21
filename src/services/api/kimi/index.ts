@@ -1,19 +1,25 @@
 import type { BetaToolUnion } from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
 import type { SystemPrompt } from '../../../utils/systemPromptType.js'
-import type { Message, StreamEvent, SystemAPIErrorMessage, AssistantMessage } from '../../../types/message.js'
+import type {
+  Message,
+  StreamEvent,
+  SystemAPIErrorMessage,
+  AssistantMessage,
+} from '../../../types/message.js'
 import type { Tools } from '../../../Tool.js'
 import type {
   ChatCompletionChunk,
   ChatCompletionCreateParamsStreaming,
 } from 'openai/resources/chat/completions/completions.mjs'
-import { getDeepSeekClient } from './client.js'
+import { getKimiClient } from './client.js'
 import {
   anthropicMessagesToOpenAI,
   anthropicToolsToOpenAI,
   anthropicToolChoiceToOpenAI,
   adaptOpenAIStreamToAnthropic,
 } from '@ant/model-provider'
-import { resolveDeepSeekModel } from './modelMapping.js'
+import { resolveKimiModel } from './modelMapping.js'
+import { sanitizeThinkingMessages } from '../deepseek/index.js'
 import { normalizeMessagesForAPI } from '../../../utils/messages.js'
 import type { SDKAssistantMessageError } from '../../../entrypoints/agentSdkTypes.js'
 import { toolToAPISchema } from '../../../utils/api.js'
@@ -26,77 +32,14 @@ import {
   createAssistantAPIErrorMessage,
   normalizeContentFromAPI,
 } from '../../../utils/messages.js'
-import { isEnvDefinedFalsy, isEnvTruthy } from '../../../utils/envUtils.js'
 
 /**
- * Check whether DeepSeek thinking mode should be enabled.
- *
- * Opt-in only via `DEEPSEEK_ENABLE_THINKING=1`. We intentionally do NOT
- * auto-enable for `deepseek-reasoner` / R1: DeepSeek's thinking mode
- * requires every assistant tool-call message in the history to echo back
- * its original `reasoning_content` on subsequent turns, otherwise the
- * API returns `400 thinking is enabled but reasoning_content is missing
- * in assistant tool call message at index N`. Claude Code's conversation
- * is tool-heavy and the OpenAI adapter doesn't round-trip reasoning
- * tokens, so defaulting thinking on breaks multi-turn agent loops.
- *
- * Users who genuinely want R1's reasoning exposed can set the env var;
- * `sanitizeThinkingMessages` below injects empty `reasoning_content`
- * into tool-call messages so the echo-back contract doesn't blow up.
+ * Kimi (Moonshot AI) query path. Kimi exposes an OpenAI-compatible Chat
+ * Completions API, so we reuse the OpenAI message/tool converters and
+ * stream adapter. Only the client (different base URL + API key) and
+ * model mapping are Kimi-specific.
  */
-function isDeepSeekThinkingEnabled(_model: string): boolean {
-  if (isEnvDefinedFalsy(process.env.DEEPSEEK_ENABLE_THINKING)) return false
-  if (isEnvTruthy(process.env.DEEPSEEK_ENABLE_THINKING)) return true
-  return false
-}
-
-/**
- * When thinking mode is enabled on an OpenAI-compatible reasoning
- * endpoint (DeepSeek Reasoner, Moonshot Kimi K2.6, etc.), the server
- * rejects the request if any assistant message with `tool_calls` is
- * missing `reasoning_content`. Our OpenAI-format converter doesn't
- * emit that field for tool-use blocks (and older assistant turns from
- * before a mid-session provider switch never had it), so we inject an
- * empty string as a safe echo-back.
- *
- * Exported so other providers (Kimi, future Qwen reasoners) can share
- * the same sanitizer.
- */
-export function sanitizeThinkingMessages(
-  messages: Array<Record<string, unknown>>,
-): Array<Record<string, unknown>> {
-  return messages.map(msg => {
-    if (msg.role !== 'assistant') return msg
-    if (typeof msg.reasoning_content === 'string') return msg
-
-    const hasTopLevelToolCalls =
-      Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0
-    // Some adapters keep the Anthropic-shaped content array with tool_use
-    // blocks inside instead of flattening to OpenAI's `tool_calls`. Detect
-    // either shape so we never leave a tool-carrying assistant message
-    // without an echo-back `reasoning_content`.
-    const hasNestedToolUse =
-      Array.isArray(msg.content) &&
-      msg.content.some(c => {
-        if (!c || typeof c !== 'object') return false
-        const type = (c as Record<string, unknown>).type
-        return type === 'tool_use' || type === 'tool_call'
-      })
-
-    if (hasTopLevelToolCalls || hasNestedToolUse) {
-      return { ...msg, reasoning_content: '' }
-    }
-    return msg
-  })
-}
-
-/**
- * DeepSeek query path. DeepSeek uses an OpenAI-compatible API, so we reuse
- * the OpenAI message/tool converters and stream adapter. Only the client
- * (different base URL + API key), model mapping, and thinking mode are
- * DeepSeek-specific.
- */
-export async function* queryModelDeepSeek(
+export async function* queryModelKimi(
   messages: Message[],
   systemPrompt: SystemPrompt,
   tools: Tools,
@@ -107,9 +50,8 @@ export async function* queryModelDeepSeek(
   void
 > {
   try {
-    const deepseekModel = resolveDeepSeekModel(options.model)
+    const kimiModel = resolveKimiModel(options.model)
     const messagesForAPI = normalizeMessagesForAPI(messages, tools)
-    const enableThinking = isDeepSeekThinkingEnabled(deepseekModel)
 
     const toolSchemas = await Promise.all(
       tools.map(tool =>
@@ -125,32 +67,49 @@ export async function* queryModelDeepSeek(
     const standardTools = toolSchemas.filter(
       (t): t is BetaToolUnion & { type: string } => {
         const anyT = t as unknown as Record<string, unknown>
-        return anyT.type !== 'advisor_20260301' && anyT.type !== 'computer_20250124'
+        return (
+          anyT.type !== 'advisor_20260301' && anyT.type !== 'computer_20250124'
+        )
       },
     )
 
-    const openaiMessagesRaw = anthropicMessagesToOpenAI(messagesForAPI, systemPrompt, {
-      enableThinking,
-    })
-    const openaiMessages = enableThinking
-      ? (sanitizeThinkingMessages(
-          openaiMessagesRaw as unknown as Array<Record<string, unknown>>,
-        ) as unknown as typeof openaiMessagesRaw)
-      : openaiMessagesRaw
+    const openaiMessagesRaw = anthropicMessagesToOpenAI(
+      messagesForAPI,
+      systemPrompt,
+    )
+    // Moonshot's K2.6 (and other reasoning Kimi SKUs) have server-side
+    // thinking enabled by default and reject the request with
+    // `400 thinking is enabled but reasoning_content is missing in
+    // assistant tool call message at index N` when any historical
+    // assistant tool-call message lacks `reasoning_content`. We inject
+    // an empty string as a no-op echo-back — harmless for non-reasoning
+    // Kimi models, required for K2.6.
+    const openaiMessages = sanitizeThinkingMessages(
+      openaiMessagesRaw as unknown as Array<Record<string, unknown>>,
+    ) as unknown as typeof openaiMessagesRaw
     const openaiTools = anthropicToolsToOpenAI(standardTools)
     const openaiToolChoice = anthropicToolChoiceToOpenAI(options.toolChoice)
 
-    const client = getDeepSeekClient({
+    const client = getKimiClient({
       maxRetries: 0,
       fetchOverride: options.fetchOverride as typeof fetch | undefined,
       source: options.querySource,
     })
 
-    logForDebugging(`[DeepSeek] Calling model=${deepseekModel}, messages=${openaiMessages.length}, tools=${openaiTools.length}, thinking=${enableThinking}`)
+    logForDebugging(
+      `[Kimi] Calling model=${kimiModel}, messages=${openaiMessages.length}, tools=${openaiTools.length}`,
+    )
 
+    // Moonshot's reasoning Kimi SKUs (K2.6, kimi-thinking-preview, …)
+    // auto-enable thinking mode server-side unless we explicitly opt out.
+    // Without this flag the server requires every historical assistant
+    // tool-call message to echo back `reasoning_content`, which we can't
+    // always produce (e.g. after a mid-session provider switch). Passing
+    // enable_thinking=false is the supported way to stay in plain
+    // chat-completion mode.
     const stream = await client.chat.completions.create(
       {
-        model: deepseekModel,
+        model: kimiModel,
         messages: openaiMessages,
         ...(openaiTools.length > 0 && {
           tools: openaiTools,
@@ -158,22 +117,22 @@ export async function* queryModelDeepSeek(
         }),
         stream: true,
         stream_options: { include_usage: true },
-        ...(enableThinking && {
-          thinking: { type: 'enabled' },
-          enable_thinking: true,
-          chat_template_kwargs: { thinking: true },
-        }),
-        ...(!enableThinking && options.temperatureOverride !== undefined && {
+        enable_thinking: false,
+        chat_template_kwargs: { thinking: false },
+        ...(options.temperatureOverride !== undefined && {
           temperature: options.temperatureOverride,
         }),
       } as ChatCompletionCreateParamsStreaming,
       { signal },
     )
 
-    const adaptedStream = adaptOpenAIStreamToAnthropic(stream as AsyncIterable<ChatCompletionChunk>, deepseekModel)
+    const adaptedStream = adaptOpenAIStreamToAnthropic(
+      stream as AsyncIterable<ChatCompletionChunk>,
+      kimiModel,
+    )
 
     const contentBlocks: Record<number, any> = {}
-    let partialMessage: any = undefined
+    let partialMessage: any
     let usage = {
       input_tokens: 0,
       output_tokens: 0,
@@ -189,7 +148,7 @@ export async function* queryModelDeepSeek(
           partialMessage = (event as any).message
           ttftMs = Date.now() - start
           if ((event as any).message?.usage) {
-            usage = { ...usage, ...((event as any).message.usage) }
+            usage = { ...usage, ...(event as any).message.usage }
           }
           break
         }
@@ -252,8 +211,11 @@ export async function* queryModelDeepSeek(
           break
       }
 
-      if (event.type === 'message_stop' && usage.input_tokens + usage.output_tokens > 0) {
-        const costUSD = calculateUSDCost(deepseekModel, usage as any)
+      if (
+        event.type === 'message_stop' &&
+        usage.input_tokens + usage.output_tokens > 0
+      ) {
+        const costUSD = calculateUSDCost(kimiModel, usage as any)
         addToTotalSessionCost(costUSD, usage as any, options.model)
       }
 
@@ -265,11 +227,13 @@ export async function* queryModelDeepSeek(
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
-    logForDebugging(`[DeepSeek] Error: ${errorMessage}`, { level: 'error' })
+    logForDebugging(`[Kimi] Error: ${errorMessage}`, { level: 'error' })
     yield createAssistantAPIErrorMessage({
       content: `API Error: ${errorMessage}`,
       apiError: 'api_error',
-      error: (error instanceof Error ? error : new Error(String(error))) as unknown as SDKAssistantMessageError,
+      error: (error instanceof Error
+        ? error
+        : new Error(String(error))) as unknown as SDKAssistantMessageError,
     })
   }
 }

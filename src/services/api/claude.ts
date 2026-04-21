@@ -1372,6 +1372,12 @@ async function* queryModel(
     return
   }
 
+  if (getAPIProvider() === 'kimi') {
+    const { queryModelKimi } = await import('./kimi/index.js')
+    yield* queryModelKimi(messagesForAPI, systemPrompt, filteredTools, signal, options)
+    return
+  }
+
   // Instrumentation: Track message count after normalization
   logEvent('tengu_api_after_normalize', {
     postNormalizedMessageCount: messagesForAPI.length,
