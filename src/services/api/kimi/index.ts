@@ -76,6 +76,7 @@ export async function* queryModelKimi(
     const openaiMessagesRaw = anthropicMessagesToOpenAI(
       messagesForAPI,
       systemPrompt,
+      { enableThinking: true, preserveAllReasoning: true }
     )
     // Moonshot's K2.6 (and other reasoning Kimi SKUs) have server-side
     // thinking enabled by default and reject the request with
@@ -117,8 +118,8 @@ export async function* queryModelKimi(
         }),
         stream: true,
         stream_options: { include_usage: true },
-        enable_thinking: false,
-        chat_template_kwargs: { thinking: false },
+        enable_thinking: true,
+        chat_template_kwargs: { thinking: true },
         ...(options.temperatureOverride !== undefined && {
           temperature: options.temperatureOverride,
         }),

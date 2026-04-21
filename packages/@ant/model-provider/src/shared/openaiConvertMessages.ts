@@ -17,6 +17,8 @@ export interface ConvertMessagesOptions {
   /** When true, preserve thinking blocks as reasoning_content on assistant messages
    *  (required for DeepSeek thinking mode with tool calls). */
   enableThinking?: boolean
+  /** When true, preserve reasoning_content even for previous turns (Kimi requires this). */
+  preserveAllReasoning?: boolean
 }
 
 /**
@@ -36,6 +38,7 @@ export function anthropicMessagesToOpenAI(
 ): ChatCompletionMessageParam[] {
   const result: ChatCompletionMessageParam[] = []
   const enableThinking = options?.enableThinking ?? false
+  const preserveAllReasoning = options?.preserveAllReasoning ?? false
 
   // Prepend system prompt as system message
   const systemText = systemPromptToText(systemPrompt)
@@ -50,7 +53,7 @@ export function anthropicMessagesToOpenAI(
   // from *previous* user turns is stripped (saves bandwidth; DeepSeek ignores it).
   // A "new turn" starts when a user text message appears after at least one assistant response.
   const turnBoundaries = new Set<number>()
-  if (enableThinking) {
+  if (enableThinking && !preserveAllReasoning) {
     let hasSeenAssistant = false
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i]
@@ -70,6 +73,8 @@ export function anthropicMessagesToOpenAI(
                 (b &&
                   typeof b === 'object' &&
                   'type' in b &&
+                  b.type !== 'tool_use' &&
+                  b.type !== 'tool_call' &&
                   b.type !== 'tool_result'),
             )
         if (startsNewUserTurn) {
@@ -88,7 +93,7 @@ export function anthropicMessagesToOpenAI(
       case 'assistant':
         // Preserve reasoning_content unless we're before a turn boundary
         // (i.e., from a previous user Q&A round)
-        const preserveReasoning = enableThinking && !isBeforeAnyTurnBoundary(i, turnBoundaries)
+        const preserveReasoning = enableThinking && (preserveAllReasoning || !isBeforeAnyTurnBoundary(i, turnBoundaries))
         result.push(...convertInternalAssistantMessage(msg, preserveReasoning))
         break
       default:
