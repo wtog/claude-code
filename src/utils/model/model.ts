@@ -27,9 +27,11 @@ import type { PermissionMode } from '../permissions/PermissionMode.js'
 import { getAPIProvider } from './providers.js'
 import { resolveDeepSeekModel } from '../../services/api/deepseek/modelMapping.js'
 import { resolveQwenModel } from '../../services/api/qwen/modelMapping.js'
-import { resolveOpenAIModel } from '../../services/api/openai/modelMapping.js'
-import { resolveGrokModel } from '../../services/api/grok/modelMapping.js'
-import { resolveGeminiModel } from '../../services/api/gemini/modelMapping.js'
+import {
+  resolveOpenAIModel,
+  resolveGrokModel,
+  resolveGeminiModel,
+} from '@ant/model-provider'
 import { LIGHTNING_BOLT } from '../../constants/figures.js'
 import { isModelAllowed } from './modelAllowlist.js'
 import { type ModelAlias, isModelAlias } from './aliases.js'

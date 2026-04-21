@@ -28,7 +28,82 @@ import {
   renderDefaultModelSetting,
 } from '../../utils/model/model.js'
 import { isModelAllowed } from '../../utils/model/modelAllowlist.js'
+import {
+  SWITCH_PROVIDER_DEEPSEEK,
+  SWITCH_PROVIDER_QWEN,
+} from '../../utils/model/modelOptions.js'
 import { validateModel } from '../../utils/model/validateModel.js'
+import { updateSettingsForSource } from '../../utils/settings/settings.js'
+import { clearQwenClientCache } from '../../services/api/qwen/client.js'
+import { loadQwenOAuthTokens } from '../../services/api/qwen/oauth.js'
+import {
+  DeepSeekLoginFlow,
+  QwenLoginFlow,
+} from './providerLoginFlow.js'
+
+type ProviderSwitchKind = 'qwen' | 'deepseek'
+
+function parseProviderSwitch(
+  model: string | null | undefined,
+): ProviderSwitchKind | null {
+  if (!model) return null
+  // Tolerate the [1m] suffix that ModelPicker may append if the user toggles it.
+  const bare = model.replace(/\[1m\]$/i, '')
+  if (bare === SWITCH_PROVIDER_QWEN) return 'qwen'
+  if (bare === SWITCH_PROVIDER_DEEPSEEK) return 'deepseek'
+  return null
+}
+
+function clearProviderEnvOverrides(): void {
+  delete process.env.CLAUDE_CODE_USE_BEDROCK
+  delete process.env.CLAUDE_CODE_USE_VERTEX
+  delete process.env.CLAUDE_CODE_USE_FOUNDRY
+  delete process.env.CLAUDE_CODE_USE_OPENAI
+  delete process.env.CLAUDE_CODE_USE_GEMINI
+  delete process.env.CLAUDE_CODE_USE_GROK
+  delete process.env.CLAUDE_CODE_USE_DEEPSEEK
+  delete process.env.CLAUDE_CODE_USE_QWEN
+}
+
+type ProviderSwitchResult =
+  | { outcome: 'switched'; message: string }
+  | { outcome: 'needs-login'; provider: ProviderSwitchKind }
+
+function tryProviderSwitch(kind: ProviderSwitchKind): ProviderSwitchResult {
+  if (kind === 'qwen') {
+    const tokens = loadQwenOAuthTokens()
+    const envKey = process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY
+    if (!tokens?.accessToken && !envKey) {
+      return { outcome: 'needs-login', provider: 'qwen' }
+    }
+    updateSettingsForSource('userSettings', {
+      modelType: 'qwen',
+    } as Record<string, unknown>)
+    clearProviderEnvOverrides()
+    process.env.CLAUDE_CODE_USE_QWEN = '1'
+    clearQwenClientCache()
+    return {
+      outcome: 'switched',
+      message: `Switched API provider to ${chalk.bold('Qwen (通义千问)')}${
+        tokens?.accessToken ? ' · OAuth' : ' · API key'
+      }`,
+    }
+  }
+
+  // deepseek
+  if (!process.env.DEEPSEEK_API_KEY) {
+    return { outcome: 'needs-login', provider: 'deepseek' }
+  }
+  updateSettingsForSource('userSettings', {
+    modelType: 'deepseek',
+  } as Record<string, unknown>)
+  clearProviderEnvOverrides()
+  process.env.CLAUDE_CODE_USE_DEEPSEEK = '1'
+  return {
+    outcome: 'switched',
+    message: `Switched API provider to ${chalk.bold('DeepSeek')}`,
+  }
+}
 
 function ModelPickerWrapper({
   onDone,
@@ -42,6 +117,11 @@ function ModelPickerWrapper({
   const mainLoopModelForSession = useAppState(s => s.mainLoopModelForSession)
   const isFastMode = useAppState(s => s.fastMode)
   const setAppState = useSetAppState()
+  const [loginStage, setLoginStage] =
+    React.useState<ProviderSwitchKind | null>(null)
+
+  if (loginStage === 'qwen') return <QwenLoginFlow onDone={onDone} />
+  if (loginStage === 'deepseek') return <DeepSeekLoginFlow onDone={onDone} />
 
   function handleCancel(): void {
     logEvent('tengu_model_command_menu', {
@@ -66,6 +146,19 @@ function ModelPickerWrapper({
       to_model:
         model as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
     })
+
+    const providerKind = parseProviderSwitch(model)
+    if (providerKind) {
+      const result = tryProviderSwitch(providerKind)
+      if (result.outcome === 'switched') {
+        onDone(result.message)
+      } else {
+        // Pivot this component to the appropriate inline login flow.
+        setLoginStage(result.provider)
+      }
+      return
+    }
+
     setAppState(prev => ({
       ...prev,
       mainLoopModel: model,
@@ -146,9 +239,22 @@ function SetModelAndClose({
   const isFastMode = useAppState(s => s.fastMode)
   const setAppState = useSetAppState()
   const model = args === 'default' ? null : args
+  const [loginStage, setLoginStage] =
+    React.useState<ProviderSwitchKind | null>(null)
 
   React.useEffect(() => {
     async function handleModelChange(): Promise<void> {
+      const providerKind = parseProviderSwitch(model)
+      if (providerKind) {
+        const result = tryProviderSwitch(providerKind)
+        if (result.outcome === 'switched') {
+          onDone(result.message)
+        } else {
+          setLoginStage(result.provider)
+        }
+        return
+      }
+
       if (model && !isModelAllowed(model)) {
         onDone(
           `Model '${model}' is not available. Your organization restricts model selection.`,
@@ -251,6 +357,8 @@ function SetModelAndClose({
     void handleModelChange()
   }, [model, onDone, setAppState])
 
+  if (loginStage === 'qwen') return <QwenLoginFlow onDone={onDone} />
+  if (loginStage === 'deepseek') return <DeepSeekLoginFlow onDone={onDone} />
   return null
 }
 
@@ -323,7 +431,15 @@ export const call: LocalJSXCommandCall = async (onDone, _context, args) => {
     logEvent('tengu_model_command_inline', {
       args: args as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
     })
-    return <SetModelAndClose args={args} onDone={onDone} />
+    // Shorthand: `/model qwen` / `/model deepseek` switches provider.
+    const lowered = args.toLowerCase()
+    const resolved =
+      lowered === 'qwen'
+        ? SWITCH_PROVIDER_QWEN
+        : lowered === 'deepseek'
+        ? SWITCH_PROVIDER_DEEPSEEK
+        : args
+    return <SetModelAndClose args={resolved} onDone={onDone} />
   }
 
   return <ModelPickerWrapper onDone={onDone} />

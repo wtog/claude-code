@@ -33,6 +33,7 @@ import {
 } from './model.js'
 import { has1mContext } from '../context.js'
 import { getGlobalConfig } from '../config.js'
+import { loadQwenOAuthTokens } from '../../services/api/qwen/oauth.js'
 
 // @[MODEL LAUNCH]: Update all the available and default model option strings below.
 
@@ -41,6 +42,81 @@ export type ModelOption = {
   label: string
   description: string
   descriptionForModel?: string
+}
+
+/**
+ * Sentinel values for provider-switch entries in the /model picker.
+ * Selecting one of these does NOT set `mainLoopModel` — instead the picker's
+ * select handler intercepts the sentinel, checks credentials for that provider,
+ * and either persists `modelType` to user settings or prints a login hint.
+ */
+export const SWITCH_PROVIDER_QWEN = '__switch-provider:qwen'
+export const SWITCH_PROVIDER_DEEPSEEK = '__switch-provider:deepseek'
+export const SWITCH_PROVIDER_VALUES: readonly string[] = [
+  SWITCH_PROVIDER_QWEN,
+  SWITCH_PROVIDER_DEEPSEEK,
+]
+
+export function isSwitchProviderValue(value: unknown): value is string {
+  return typeof value === 'string' && SWITCH_PROVIDER_VALUES.includes(value)
+}
+
+export type ProviderAuthState = 'oauth' | 'apiKey' | 'none'
+
+export function getQwenAuthState(): ProviderAuthState {
+  const tokens = loadQwenOAuthTokens()
+  if (tokens?.accessToken) return 'oauth'
+  if (process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY) return 'apiKey'
+  return 'none'
+}
+
+export function getDeepSeekAuthState(): ProviderAuthState {
+  if (process.env.DEEPSEEK_API_KEY) return 'apiKey'
+  return 'none'
+}
+
+function formatProviderStatus(
+  active: boolean,
+  auth: ProviderAuthState,
+): string {
+  const parts: string[] = []
+  if (active) parts.push('Active')
+  switch (auth) {
+    case 'oauth':
+      parts.push('logged in via OAuth')
+      break
+    case 'apiKey':
+      parts.push('API key set')
+      break
+    case 'none':
+      parts.push('not logged in')
+      break
+  }
+  return parts.join(' · ')
+}
+
+function getQwenProviderOption(): ModelOption {
+  const active = getAPIProvider() === 'qwen'
+  const auth = getQwenAuthState()
+  return {
+    value: SWITCH_PROVIDER_QWEN,
+    label: 'Qwen (通义千问)',
+    description: `Qwen via DashScope / portal.qwen.ai · ${formatProviderStatus(active, auth)}`,
+    descriptionForModel:
+      'Switch API provider to Qwen (通义千问). Requires `claude qwen login` or QWEN_API_KEY.',
+  }
+}
+
+function getDeepSeekProviderOption(): ModelOption {
+  const active = getAPIProvider() === 'deepseek'
+  const auth = getDeepSeekAuthState()
+  return {
+    value: SWITCH_PROVIDER_DEEPSEEK,
+    label: 'DeepSeek',
+    description: `DeepSeek Chat / Reasoner via api.deepseek.com · ${formatProviderStatus(active, auth)}`,
+    descriptionForModel:
+      'Switch API provider to DeepSeek. Requires DEEPSEEK_API_KEY.',
+  }
 }
 
 export function getDefaultOptionForUser(fastMode = false): ModelOption {
@@ -537,6 +613,12 @@ export function getModelOptions(fastMode = false): ModelOption[] {
       options.push(opt)
     }
   }
+
+  // Provider-switch entries (Qwen / DeepSeek). These are sentinel values —
+  // selecting them is intercepted in the /model command handler, which
+  // either switches `modelType` in userSettings or prints a login hint.
+  options.push(getQwenProviderOption())
+  options.push(getDeepSeekProviderOption())
 
   // Add custom model from either the current model value or the initial one
   // if it is not already in the options.

@@ -13,12 +13,12 @@ import type {
 } from 'openai/resources/chat/completions/completions.mjs'
 import { getQwenClient } from './client.js'
 import { resolveQwenAuth } from './oauth.js'
-import { anthropicMessagesToOpenAI } from '../openai/convertMessages.js'
 import {
+  anthropicMessagesToOpenAI,
   anthropicToolsToOpenAI,
   anthropicToolChoiceToOpenAI,
-} from '../openai/convertTools.js'
-import { adaptOpenAIStreamToAnthropic } from '../openai/streamAdapter.js'
+  adaptOpenAIStreamToAnthropic,
+} from '@ant/model-provider'
 import { resolveQwenModel } from './modelMapping.js'
 import { normalizeMessagesForAPI } from '../../../utils/messages.js'
 import type { SDKAssistantMessageError } from '../../../entrypoints/agentSdkTypes.js'
